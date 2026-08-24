@@ -365,8 +365,17 @@ export async function sendSurveyEmail(event, context) {
   try {
     const issueKey = event?.issue?.key || event?.issue?.id || event?.issueKey || context?.extension?.issue?.key;
     if (!issueKey) {
-      console.error('No se encontro issueKey en el evento');
       return;
+    }
+
+    if (event?.changelog) {
+      const statusChange = event.changelog.items?.find(item => item.field === 'status');
+      if (statusChange) {
+        const toStatus = (statusChange.toString || '').toLowerCase();
+        if (!toStatus.includes('cerrado') && !toStatus.includes('closed')) {
+          return;
+        }
+      }
     }
 
     const alreadySent = await kvs.get(`survey_email_sent:${issueKey}`);
