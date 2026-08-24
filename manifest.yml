@@ -5,16 +5,15 @@ modules:
       urlFormat: v2
       response:
         type: dynamic
-    - key: survey-metrics-webtrigger
-      function: metrics-handler
-      urlFormat: v2
-      response:
-        type: dynamic
+  jira:projectPage:
+    - key: survey-metrics-project-page
+      function: project-page-fn
+      title: Reporte de Encuestas
   function:
     - key: survey-handler
       handler: index.run
-    - key: metrics-handler
-      handler: index.runMetrics
+    - key: project-page-fn
+      handler: index.runProjectPage
 app:
   runtime:
     name: nodejs24.x
@@ -26,6 +25,7 @@ permissions:
     - read:jira-work
     - write:jira-work
     - storage:app
+
 
 
 

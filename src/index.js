@@ -1,35 +1,22 @@
 import api, { route } from '@forge/api';
 import { kvs } from '@forge/kvs';
 
-/**
- * Módulo 1: Web Trigger para capturar encuestas de satisfacción.
- * Escala de 3 niveles: Bueno, Regular, Malo.
- * Registra comentarios en Jira y persiste las métricas en Forge Storage.
- *
- * @param {import('@forge/api').WebTriggerRequest} event
- * @param {import('@forge/api').WebTriggerContext} context
- * @returns {Promise<import('@forge/api').WebTriggerResponse>}
- */
 export async function run(event, context) {
   const method = event.method ? event.method.toUpperCase() : 'GET';
   const queryParams = event.queryParameters || {};
 
-  // Extraer el ID del ticket enviado en los query params (ej. ?ticketId=CS-101 o ?issueKey=CS-101)
   const ticketId = queryParams.ticketId
     ? queryParams.ticketId[0]
     : (queryParams.issueKey ? queryParams.issueKey[0] : 'DESCONOCIDO');
 
-  // A. Verificar si la encuesta ya fue respondida anteriormente para este ticket
   let isAlreadySubmitted = false;
   let existingSurveyData = null;
 
   if (ticketId !== 'DESCONOCIDO') {
-    // 1. Consultar primero en Key-Value Storage (KVS)
     existingSurveyData = await kvs.get(`survey_completed:${ticketId}`);
     if (existingSurveyData) {
       isAlreadySubmitted = true;
     } else {
-      // 2. Consulta de respaldo en la API de Jira (verificar si customfield_12706 ya tiene valor)
       try {
         const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${ticketId}?fields=customfield_12706`, {
           headers: { 'Accept': 'application/json' }
@@ -43,12 +30,11 @@ export async function run(event, context) {
           }
         }
       } catch (e) {
-        console.error(`Error al verificar encuesta previa para ${ticketId}:`, e);
+        console.error(e);
       }
     }
   }
 
-  // Si ya fue respondida, mostrar la pantalla informativa de "Encuesta Ya Completada"
   if (isAlreadySubmitted) {
     const ratingVal = existingSurveyData?.rating || 'Registrada';
     const ratingEmoji = ratingVal === 'Bueno' ? '😄' : (ratingVal === 'Regular' ? '😐' : (ratingVal === 'Malo' ? '🙁' : '✅'));
@@ -88,10 +74,9 @@ export async function run(event, context) {
     };
   }
 
-  // 1. Procesar envío de formulario (POST)
   if (method === 'POST') {
     try {
-      let rating = 'Bueno'; // Valores permitidos: Bueno, Regular, Malo
+      let rating = 'Bueno';
       let comments = '';
       let submittedTicketId = ticketId;
 
@@ -102,7 +87,6 @@ export async function run(event, context) {
         submittedTicketId = parsedParams.get('ticketId') || submittedTicketId;
       }
 
-      // Validar calificación permitida
       if (!['Bueno', 'Regular', 'Malo'].includes(rating)) {
         rating = 'Bueno';
       }
@@ -111,7 +95,6 @@ export async function run(event, context) {
       const ratingEmoji = rating === 'Bueno' ? '😄' : (rating === 'Regular' ? '😐' : '🙁');
 
       if (submittedTicketId !== 'DESCONOCIDO') {
-        // A. Actualizar el campo personalizado de tipo Radio Button customfield_12706 en Jira
         try {
           const updateFieldRes = await api.asApp().requestJira(route`/rest/api/3/issue/${submittedTicketId}`, {
             method: 'PUT',
@@ -122,7 +105,7 @@ export async function run(event, context) {
             body: JSON.stringify({
               fields: {
                 customfield_12706: {
-                  value: rating // 'Bueno', 'Regular', o 'Malo'
+                  value: rating
                 }
               }
             })
@@ -130,13 +113,12 @@ export async function run(event, context) {
 
           if (!updateFieldRes.ok) {
             const errorText = await updateFieldRes.text();
-            console.error(`Error al actualizar customfield_12706 en ${submittedTicketId}:`, errorText);
+            console.error(errorText);
           }
         } catch (fieldErr) {
-          console.error(`Excepción al actualizar customfield_12706:`, fieldErr);
+          console.error(fieldErr);
         }
 
-        // B. Publicar comentario interno en la incidencia de Jira
         const commentData = {
           body: {
             type: 'doc',
@@ -175,7 +157,6 @@ export async function run(event, context) {
           body: JSON.stringify(commentData)
         });
 
-        // C. Marcar encuesta como completada para este ticket en KVS para prevenir re-envíos
         await kvs.set(`survey_completed:${submittedTicketId}`, {
           rating,
           ratingScore,
@@ -183,7 +164,6 @@ export async function run(event, context) {
           submittedAt: new Date().toISOString()
         });
 
-        // D. Persistir respuesta en Forge Storage para Reportería y Métricas
         const newRecord = {
           id: `survey:${submittedTicketId}:${Date.now()}`,
           ticketId: submittedTicketId,
@@ -193,13 +173,11 @@ export async function run(event, context) {
           submittedAt: new Date().toISOString()
         };
 
-        // Actualizar lista reciente (máximo 100 respuestas)
         const recentList = (await kvs.get('survey_recent_list')) || [];
         recentList.unshift(newRecord);
         if (recentList.length > 100) recentList.pop();
         await kvs.set('survey_recent_list', recentList);
 
-        // Actualizar métricas generales
         const summary = (await kvs.get('survey_metrics_summary')) || {
           total: 0,
           bueno: 0,
@@ -214,7 +192,6 @@ export async function run(event, context) {
         await kvs.set('survey_metrics_summary', summary);
       }
 
-      // Retornar pantalla de agradecimiento
       return {
         statusCode: 200,
         headers: { 'Content-Type': ['text/html; charset=utf-8'] },
@@ -244,7 +221,7 @@ export async function run(event, context) {
         `
       };
     } catch (error) {
-      console.error('Error al procesar la encuesta:', error);
+      console.error(error);
       return {
         statusCode: 500,
         headers: { 'Content-Type': ['text/html; charset=utf-8'] },
@@ -253,7 +230,6 @@ export async function run(event, context) {
     }
   }
 
-  // 2. Procesar solicitud de lectura (GET) - Renderizar la interfaz con la Escala de 3 Opciones (Bueno, Regular, Malo)
   const htmlBody = `
     <!DOCTYPE html>
     <html lang="es">
@@ -269,7 +245,6 @@ export async function run(event, context) {
         .ticket-badge { background: #DEEBFF; color: #0747A6; padding: 4px 8px; border-radius: 4px; font-weight: 700; font-size: 14px; }
         label { display: block; font-weight: 600; margin-top: 20px; margin-bottom: 8px; color: #344563; font-size: 14px; }
         
-        /* Escala de 3 Opciones: Bueno - Regular - Malo */
         .rating-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
         .rating-option { position: relative; }
         .rating-option input[type="radio"] { position: absolute; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
@@ -277,7 +252,6 @@ export async function run(event, context) {
         .rating-card .emoji { font-size: 32px; display: block; margin-bottom: 6px; }
         .rating-card .title { font-weight: 600; font-size: 14px; color: #172B4D; }
 
-        /* Estilos seleccionados por opción */
         .rating-option input[value="Bueno"]:checked + .rating-card { border-color: #36B37E; background: #E3FCEF; }
         .rating-option input[value="Bueno"]:checked + .rating-card .title { color: #006644; }
 
@@ -349,24 +323,72 @@ export async function run(event, context) {
   };
 }
 
-/**
- * Módulo 2: Reportería y Dashboard de Métricas de Encuestas (jira:globalPage).
- * Muestra KPIs (Total encuestas, % CSAT, Bueno, Regular, Malo), barra de progreso 
- * y tabla detallada con las últimas respuestas guardadas en Forge Storage.
- *
- * @param {import('@forge/api').WebTriggerRequest} event
- * @param {import('@forge/api').WebTriggerContext} context
- * @returns {Promise<import('@forge/api').WebTriggerResponse>}
- */
-export async function runMetrics(event, context) {
-  const summary = (await kvs.get('survey_metrics_summary')) || {
+export async function runProjectPage(event, context) {
+  let ticketList = [];
+  let summary = {
     total: 0,
     bueno: 0,
     regular: 0,
     malo: 0
   };
 
-  const recentList = (await kvs.get('survey_recent_list')) || [];
+  try {
+    const searchRes = await api.asApp().requestJira(route`/rest/api/3/search?jql=project = "ITSM" AND "cf[12706]" is not EMPTY ORDER BY updated DESC&maxResults=50&fields=summary,customfield_12706,updated,comment`, {
+      headers: { 'Accept': 'application/json' }
+    });
+
+    if (searchRes.ok) {
+      const data = await searchRes.json();
+      if (data.issues && data.issues.length > 0) {
+        ticketList = data.issues.map(issue => {
+          const ratingVal = issue.fields?.customfield_12706?.value || 'Bueno';
+          
+          if (ratingVal === 'Bueno') summary.bueno += 1;
+          else if (ratingVal === 'Regular') summary.regular += 1;
+          else if (ratingVal === 'Malo') summary.malo += 1;
+          summary.total += 1;
+
+          let commentText = '';
+          const comments = issue.fields?.comment?.comments || [];
+          for (let i = comments.length - 1; i >= 0; i--) {
+            const rawBody = JSON.stringify(comments[i].body || {});
+            if (rawBody.includes('Encuesta de Satisfacción Recibida')) {
+              try {
+                const paragraphs = comments[i].body?.content || [];
+                for (const p of paragraphs) {
+                  const textItems = p.content || [];
+                  for (const t of textItems) {
+                    if (t.text && t.text.includes('- Comentarios:')) {
+                      commentText = t.text.split('- Comentarios:')[1]?.trim() || '';
+                    }
+                  }
+                }
+              } catch (parseErr) {
+                console.error(parseErr);
+              }
+              break;
+            }
+          }
+
+          return {
+            ticketId: issue.key,
+            summary: issue.fields?.summary || '',
+            rating: ratingVal,
+            comments: commentText,
+            submittedAt: issue.fields?.updated || ''
+          };
+        });
+      }
+    }
+  } catch (err) {
+    console.error(err);
+  }
+
+  if (ticketList.length === 0) {
+    const kvsList = (await kvs.get('survey_recent_list')) || [];
+    ticketList = kvsList.filter(item => item.ticketId.startsWith('ITSM-'));
+    summary = (await kvs.get('survey_metrics_summary')) || { total: 0, bueno: 0, regular: 0, malo: 0 };
+  }
 
   const csatPercentage = summary.total > 0
     ? Math.round((summary.bueno / summary.total) * 100)
@@ -376,22 +398,22 @@ export async function runMetrics(event, context) {
   const regularPct = summary.total > 0 ? Math.round((summary.regular / summary.total) * 100) : 0;
   const maloPct = summary.total > 0 ? Math.round((summary.malo / summary.total) * 100) : 0;
 
-  // Generar filas para la tabla de respuestas
-  const rowsHtml = recentList.map(item => {
+  const rowsHtml = ticketList.map(item => {
     let badgeClass = 'badge-bueno';
     let emoji = '😄';
     if (item.rating === 'Regular') { badgeClass = 'badge-regular'; emoji = '😐'; }
     if (item.rating === 'Malo') { badgeClass = 'badge-malo'; emoji = '🙁'; }
 
-    const formattedDate = new Date(item.submittedAt).toLocaleString('es-ES', {
+    const formattedDate = item.submittedAt ? new Date(item.submittedAt).toLocaleString('es-ES', {
       day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
-    });
+    }) : '-';
 
     return `
       <tr>
-        <td><strong>${item.ticketId}</strong></td>
+        <td><a href="/browse/${item.ticketId}" target="_blank" style="color:#0052CC; text-decoration:none; font-weight:700;">${item.ticketId}</a></td>
+        <td>${item.summary ? `<span style="color:#172B4D;">${item.summary}</span>` : '<em style="color:#A5ADBA">Sin resumen</em>'}</td>
         <td><span class="badge ${badgeClass}">${emoji} ${item.rating}</span></td>
-        <td>${item.comments || '<em style="color:#A5ADBA">Sin comentarios</em>'}</td>
+        <td>${item.comments ? item.comments : '<em style="color:#A5ADBA">Sin comentarios</em>'}</td>
         <td style="color:#5E6C84; font-size: 13px;">${formattedDate}</td>
       </tr>
     `;
@@ -402,21 +424,20 @@ export async function runMetrics(event, context) {
     <html lang="es">
     <head>
       <meta charset="UTF-8">
-      <title>Reportería de Encuestas</title>
+      <title>Reporte de Encuestas - Proyecto ITSM</title>
       <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #FAFBFC; padding: 24px; margin: 0; color: #172B4D; }
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
         h1 { font-size: 24px; margin: 0; color: #091E42; }
         .subtitle { color: #5E6C84; font-size: 14px; margin-top: 4px; }
+        .project-tag { background: #DEEBFF; color: #0747A6; padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 12px; margin-left: 8px; }
         
-        /* Grid de KPIs */
         .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
         .kpi-card { background: white; border: 1px solid #DFE1E6; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
         .kpi-title { font-size: 12px; font-weight: 700; text-transform: uppercase; color: #5E6C84; margin-bottom: 8px; letter-spacing: 0.5px; }
         .kpi-value { font-size: 32px; font-weight: 700; color: #091E42; }
         .kpi-sub { font-size: 13px; font-weight: 600; margin-top: 4px; }
 
-        /* Barra de distribución */
         .card { background: white; border: 1px solid #DFE1E6; border-radius: 8px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
         .card-title { font-size: 16px; font-weight: 700; margin-top: 0; margin-bottom: 16px; color: #091E42; }
         
@@ -429,7 +450,6 @@ export async function runMetrics(event, context) {
         .legend-item { display: flex; align-items: center; gap: 6px; }
         .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 
-        /* Tabla de respuestas */
         table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
         th { background: #F4F5F7; padding: 12px; border-bottom: 2px solid #DFE1E6; color: #42526E; font-weight: 600; }
         td { padding: 12px; border-bottom: 1px solid #DFE1E6; vertical-align: middle; }
@@ -444,16 +464,16 @@ export async function runMetrics(event, context) {
     <body>
       <div class="header">
         <div>
-          <h1>Métricas de Encuestas de Satisfacción</h1>
-          <div class="subtitle">Panel de reportería general y desempeño de servicio</div>
+          <h1>Reporte de Encuestas de Satisfacción <span class="project-tag">ITSM</span></h1>
+          <div class="subtitle">Desempeño y respuestas de encuestas para las solicitudes del proyecto ITSM</div>
         </div>
       </div>
 
       <div class="kpi-grid">
         <div class="kpi-card">
-          <div class="kpi-title">Total Encuestas</div>
+          <div class="kpi-title">Total Evaluados</div>
           <div class="kpi-value">${summary.total}</div>
-          <div class="kpi-sub" style="color: #0052CC;">Respuestas Registradas</div>
+          <div class="kpi-sub" style="color: #0052CC;">Tickets con Encuesta</div>
         </div>
 
         <div class="kpi-card">
@@ -476,7 +496,7 @@ export async function runMetrics(event, context) {
       </div>
 
       <div class="card">
-        <div class="card-title">Distribución de Calificaciones</div>
+        <div class="card-title">Distribución de Calificaciones (Proyecto ITSM)</div>
         <div class="progress-bar">
           <div class="bar-bueno" title="Bueno: ${buenoPct}%"></div>
           <div class="bar-regular" title="Regular: ${regularPct}%"></div>
@@ -490,15 +510,16 @@ export async function runMetrics(event, context) {
       </div>
 
       <div class="card">
-        <div class="card-title">Últimas Respuestas Recibidas</div>
-        ${recentList.length === 0 ? '<p style="color:#5E6C84">Aún no se han recibido respuestas de encuestas.</p>' : `
+        <div class="card-title">Detalle de Respuestas por Ticket (ITSM)</div>
+        ${ticketList.length === 0 ? '<p style="color:#5E6C84">Aún no se han registrado encuestas para los tickets del proyecto ITSM.</p>' : `
           <table>
             <thead>
               <tr>
-                <th>Ticket ID</th>
-                <th>Calificación</th>
+                <th style="width: 140px;">Clave Ticket</th>
+                <th>Resumen</th>
+                <th style="width: 130px;">Calificación</th>
                 <th>Comentarios</th>
-                <th>Fecha de Envío</th>
+                <th style="width: 160px;">Última Actualización</th>
               </tr>
             </thead>
             <tbody>
@@ -517,5 +538,3 @@ export async function runMetrics(event, context) {
     body: htmlBody
   };
 }
-
-
