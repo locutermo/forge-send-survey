@@ -363,38 +363,26 @@ export async function run(event, context) {
 
 export async function sendSurveyEmail(event, context) {
   try {
-    console.log('sendSurveyEmail disparado. Event:', JSON.stringify(event));
-
     const issueKey = event?.issue?.key || event?.issue?.id || event?.issueKey || context?.extension?.issue?.key;
     if (!issueKey) {
       console.error('No se encontro issueKey en el evento');
       return;
     }
 
-    if (event?.changelog) {
-      const statusChange = event.changelog.items?.find(item => item.field === 'status');
-      if (statusChange) {
-        const toStatus = (statusChange.toString || '').toLowerCase();
-        if (!toStatus.includes('cerrado') && !toStatus.includes('closed')) {
-          console.log(`Estado cambiado a '${statusChange.toString}', no es Cerrado. Se omite.`);
-          return;
-        }
-      }
-    }
-
     const alreadySent = await kvs.get(`survey_email_sent:${issueKey}`);
     if (alreadySent) {
-      console.log(`El correo de encuesta para ${issueKey} ya fue enviado recientemente.`);
       return;
     }
 
-    let reporterAccountId = null;
+    await kvs.set(`survey_email_sent:${issueKey}`, {
+      sentAt: new Date().toISOString()
+    });
+
     let reporterName = 'Usuario';
     try {
-      const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=reporter,summary,status`);
+      const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=reporter`);
       if (issueRes.ok) {
         const issueData = await issueRes.json();
-        reporterAccountId = issueData.fields?.reporter?.accountId;
         reporterName = issueData.fields?.reporter?.displayName || reporterName;
       }
     } catch (fetchErr) {
@@ -422,10 +410,6 @@ export async function sendSurveyEmail(event, context) {
                 Calificar Atención
               </a>
             </div>
-            <p style="font-size: 13px; color: #6B778C; margin-bottom: 0;">
-              Si el botón no funciona, ingresa directamente a través de este enlace:<br>
-              <a href="${surveyUrl}" style="color: #0052CC; word-break: break-all;">${surveyUrl}</a>
-            </p>
           </div>
           <div style="background-color: #F4F5F7; padding: 16px 24px; text-align: center; font-size: 12px; color: #6B778C; border-top: 1px solid #DFE1E6;">
             Mesa de Ayuda • Gestión de Servicios TI
@@ -433,8 +417,7 @@ export async function sendSurveyEmail(event, context) {
         </div>
       `,
       to: {
-        reporter: true,
-        users: reporterAccountId ? [{ accountId: reporterAccountId }] : []
+        reporter: true
       }
     };
 
@@ -450,13 +433,6 @@ export async function sendSurveyEmail(event, context) {
     const notifyStatus = notifyRes.status;
     const notifyBody = await notifyRes.text();
     console.log(`Respuesta notify para ${issueKey}: status=${notifyStatus}, body=${notifyBody}`);
-
-    if (notifyRes.ok || notifyStatus === 204) {
-      await kvs.set(`survey_email_sent:${issueKey}`, {
-        sentAt: new Date().toISOString(),
-        reporterAccountId
-      });
-    }
   } catch (err) {
     console.error('Error en sendSurveyEmail:', err);
   }
