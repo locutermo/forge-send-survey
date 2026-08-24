@@ -7,13 +7,15 @@ modules:
         type: dynamic
   jira:projectPage:
     - key: survey-metrics-project-page
-      function: project-page-fn
       title: Reporte de Encuestas
+      resource: main
+      render: native
   function:
     - key: survey-handler
       handler: index.run
-    - key: project-page-fn
-      handler: project-page.run
+resources:
+  - key: main
+    path: src/frontend/index.jsx
 app:
   runtime:
     name: nodejs24.x
