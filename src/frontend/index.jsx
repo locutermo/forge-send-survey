@@ -27,7 +27,7 @@ const App = () => {
       const context = await view.getContext();
       const projectKey = context?.extension?.project?.key || 'ITSM';
 
-      const searchRes = await requestJira('/rest/api/3/search', {
+      const searchRes = await requestJira('/rest/api/3/search/jql', {
         method: 'POST',
         headers: {
           'Accept': 'application/json',
