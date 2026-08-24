@@ -15,6 +15,11 @@ modules:
       name: Enviar Encuesta de Satisfacción por Correo
       description: Envía un correo con el enlace de la encuesta al reporter cuando el ticket pasa a estado Cerrado
       function: send-survey-email-fn
+  trigger:
+    - key: issue-closed-trigger
+      events:
+        - avi:jira:updated:issue
+      function: send-survey-email-fn
   function:
     - key: survey-handler
       handler: index.run

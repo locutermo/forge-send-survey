@@ -363,12 +363,23 @@ export async function run(event, context) {
 
 export async function sendSurveyEmail(event, context) {
   try {
-    console.log('sendSurveyEmail postfunction ejecutado con event:', JSON.stringify(event));
+    console.log('sendSurveyEmail invocado con event:', JSON.stringify(event));
 
     const issueKey = event?.issue?.key || event?.issue?.id || event?.issueKey || context?.extension?.issue?.key;
     if (!issueKey) {
-      console.error('No se encontro issueKey en el evento de postfunction');
+      console.error('No se encontro issueKey en el evento');
       return;
+    }
+
+    if (event?.changelog) {
+      const statusChange = event.changelog.items?.find(item => item.field === 'status');
+      if (statusChange) {
+        const toStatus = (statusChange.toString || '').toLowerCase();
+        if (!toStatus.includes('cerrado') && !toStatus.includes('closed')) {
+          console.log(`Estado cambiado a '${statusChange.toString}', no es Cerrado. Se omite.`);
+          return;
+        }
+      }
     }
 
     const alreadySent = await kvs.get(`survey_email_sent:${issueKey}`);
@@ -418,7 +429,7 @@ export async function sendSurveyEmail(event, context) {
             </div>
           </div>
           <div style="background-color: #F4F5F7; padding: 16px 24px; text-align: center; font-size: 12px; color: #6B778C; border-top: 1px solid #DFE1E6;">
-            Mesa de Ayuda • Gestión de Servicios TI
+            Mesa de Help Desk • Gestión de Servicios TI
           </div>
         </div>
       `,
@@ -438,8 +449,8 @@ export async function sendSurveyEmail(event, context) {
 
     const notifyStatus = notifyRes.status;
     const notifyBody = await notifyRes.text();
-    console.log(`Respuesta notify postfunction para ${issueKey}: status=${notifyStatus}, body=${notifyBody}`);
+    console.log(`Respuesta notify para ${issueKey}: status=${notifyStatus}, body=${notifyBody}`);
   } catch (err) {
-    console.error('Error en sendSurveyEmail postfunction:', err);
+    console.error('Error en sendSurveyEmail:', err);
   }
 }
