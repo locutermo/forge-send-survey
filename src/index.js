@@ -372,9 +372,12 @@ export async function sendSurveyEmail(event, context) {
     }
 
     const alreadySent = await kvs.get(`survey_email_sent:${issueKey}`);
-    if (alreadySent) {
-      console.log(`El correo para ${issueKey} ya fue enviado recientemente.`);
-      return;
+    if (alreadySent && alreadySent.sentAt) {
+      const diffMs = Date.now() - new Date(alreadySent.sentAt).getTime();
+      if (diffMs < 30000) {
+        console.log(`Correo para ${issueKey} enviado hace menos de 30 segundos. Se omite duplicado.`);
+        return;
+      }
     }
 
     await kvs.set(`survey_email_sent:${issueKey}`, {
