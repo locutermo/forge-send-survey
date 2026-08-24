@@ -10,9 +10,16 @@ modules:
       title: Reporte de Encuestas
       resource: main
       render: native
+  jira:workflowPostFunction:
+    - key: send-survey-email
+      name: Enviar Encuesta de Satisfacción por Correo
+      description: Envía un correo con el enlace de la encuesta al reporter cuando el ticket pasa a estado Cerrado
+      function: send-survey-email-fn
   function:
     - key: survey-handler
       handler: index.run
+    - key: send-survey-email-fn
+      handler: index.sendSurveyEmail
 resources:
   - key: main
     path: src/frontend/index.jsx

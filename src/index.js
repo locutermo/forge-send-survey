@@ -322,3 +322,65 @@ export async function run(event, context) {
     body: htmlBody
   };
 }
+
+export async function sendSurveyEmail(event, context) {
+  try {
+    const issueKey = event?.issue?.key || event?.issue?.id;
+    if (!issueKey) {
+      console.error('No se encontro issueKey en el evento de transicion');
+      return;
+    }
+
+    const baseUrl = process.env.WEBTRIGGER_SURVEY_URL || 'https://d855b895-7188-44bc-8e14-21f7d83a1142.webtrigger.atlassian.app/public/KVOty-1Sb6K0u_nw8w1gxLggDqs';
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    const surveyUrl = `${baseUrl}${separator}ticketId=${issueKey}`;
+
+    const notifyPayload = {
+      subject: `Encuesta de Satisfacción - Solicitud ${issueKey}`,
+      textBody: `Hola,\n\nTu solicitud ${issueKey} ha sido cerrada.\nTe invitamos a evaluar el servicio recibido ingresando al siguiente enlace:\n${surveyUrl}\n\n¡Gracias por tu tiempo!`,
+      htmlBody: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #DFE1E6; border-radius: 8px; overflow: hidden;">
+          <div style="background-color: #0052CC; padding: 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 600;">Encuesta de Satisfacción</h1>
+          </div>
+          <div style="padding: 32px 24px; color: #172B4D; font-size: 15px; line-height: 1.6;">
+            <p style="margin-top: 0;">Hola,</p>
+            <p>Te informamos que tu solicitud <strong style="color: #0052CC;">${issueKey}</strong> ha sido marcada como <strong>Cerrada</strong>.</p>
+            <p>Queremos brindarte la mejor experiencia posible, por lo que tu opinión sobre la atención recibida es fundamental para nosotros.</p>
+            <div style="text-align: center; margin: 32px 0;">
+              <a href="${surveyUrl}" style="background-color: #0052CC; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 700; font-size: 16px; display: inline-block;">
+                Calificar Atención
+              </a>
+            </div>
+            <p style="font-size: 13px; color: #6B778C; margin-bottom: 0;">
+              Si el botón no funciona, ingresa directamente a través de este enlace:<br>
+              <a href="${surveyUrl}" style="color: #0052CC; word-break: break-all;">${surveyUrl}</a>
+            </p>
+          </div>
+          <div style="background-color: #F4F5F7; padding: 16px 24px; text-align: center; font-size: 12px; color: #6B778C; border-top: 1px solid #DFE1E6;">
+            Mesa de Ayuda • Gestión de Servicios TI
+          </div>
+        </div>
+      `,
+      to: {
+        reporter: true
+      }
+    };
+
+    const notifyRes = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}/notify`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(notifyPayload)
+    });
+
+    if (!notifyRes.ok) {
+      const errText = await notifyRes.text();
+      console.error(`Error enviando notificacion a reporter (${notifyRes.status}): ${errText}`);
+    }
+  } catch (err) {
+    console.error('Error en sendSurveyEmail:', err);
+  }
+}
