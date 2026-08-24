@@ -1,0 +1,14 @@
+{
+  "name": "send-surveys",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "lint": "forge lint"
+  },
+  "dependencies": {
+    "@forge/api": "^5.0.1",
+    "@forge/kvs": "^1.1.0"
+  }
+}

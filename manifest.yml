@@ -1,0 +1,31 @@
+modules:
+  webtrigger:
+    - key: survey-webtrigger
+      function: survey-handler
+      urlFormat: v2
+      response:
+        type: dynamic
+    - key: survey-metrics-webtrigger
+      function: metrics-handler
+      urlFormat: v2
+      response:
+        type: dynamic
+  function:
+    - key: survey-handler
+      handler: index.run
+    - key: metrics-handler
+      handler: index.runMetrics
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/c0d9da9c-4819-4d0f-bdf8-1bcb39654fb6
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - storage:app
+
+
+
