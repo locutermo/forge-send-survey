@@ -27,12 +27,22 @@ const App = () => {
       const context = await view.getContext();
       const projectKey = context?.extension?.project?.key || 'ITSM';
 
-      const searchRes = await requestJira(
-        `/rest/api/3/search?jql=project = "${projectKey}" AND "cf[12706]" is not EMPTY ORDER BY updated DESC&maxResults=100&fields=summary,customfield_12706,updated`
-      );
+      const searchRes = await requestJira('/rest/api/3/search', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          jql: `project = "${projectKey}" AND "cf[12706]" is not EMPTY ORDER BY updated DESC`,
+          fields: ['summary', 'customfield_12706', 'updated'],
+          maxResults: 100
+        })
+      });
 
       if (!searchRes.ok) {
-        throw new Error('Error al consultar las incidencias de Jira');
+        const errorData = await searchRes.text();
+        throw new Error(`Error al consultar incidencias (${searchRes.status}): ${errorData}`);
       }
 
       const data = await searchRes.json();
@@ -40,7 +50,8 @@ const App = () => {
 
       let stats = { total: 0, bueno: 0, regular: 0, malo: 0 };
       const items = issues.map((issue) => {
-        const ratingVal = issue.fields?.customfield_12706?.value || 'Bueno';
+        const rawField = issue.fields?.customfield_12706;
+        const ratingVal = (typeof rawField === 'object' && rawField !== null ? rawField.value : rawField) || 'Bueno';
 
         if (ratingVal === 'Bueno') stats.bueno += 1;
         else if (ratingVal === 'Regular') stats.regular += 1;
