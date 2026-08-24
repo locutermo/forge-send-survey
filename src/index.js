@@ -9,6 +9,8 @@ export async function run(event, context) {
     ? queryParams.ticketId[0]
     : (queryParams.issueKey ? queryParams.issueKey[0] : 'DESCONOCIDO');
 
+  const initialRating = queryParams.rating ? queryParams.rating[0] : 'Bueno';
+
   if (!ticketId || ticketId === 'DESCONOCIDO' || ticketId.trim() === '') {
     return {
       statusCode: 400,
@@ -44,27 +46,64 @@ export async function run(event, context) {
     };
   }
 
+  let ticketExists = false;
+  let existingFieldValue = null;
+  try {
+    const verifyRes = await api.asApp().requestJira(route`/rest/api/3/issue/${ticketId}?fields=customfield_12706,summary`, {
+      headers: { 'Accept': 'application/json' }
+    });
+    if (verifyRes.ok) {
+      ticketExists = true;
+      const verifyData = await verifyRes.json();
+      existingFieldValue = verifyData.fields?.customfield_12706?.value || null;
+    }
+  } catch (e) {
+    console.error(e);
+  }
+
+  if (!ticketExists) {
+    return {
+      statusCode: 404,
+      headers: { 'Content-Type': ['text/html; charset=utf-8'] },
+      body: `
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Solicitud No Encontrada</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f5f7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); text-align: center; max-width: 440px; width: 90%; }
+            h2 { color: #DE350B; margin-bottom: 12px; font-size: 22px; }
+            p { color: #5E6C84; line-height: 1.5; font-size: 15px; }
+            .status-box { background: #FFEBE6; border: 1px solid #FFBDAD; color: #BF2600; padding: 12px; border-radius: 8px; font-weight: 600; margin-top: 16px; font-size: 14px; }
+            .icon { font-size: 56px; margin-bottom: 16px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="icon">🔍</div>
+            <h2>Solicitud No Encontrada</h2>
+            <p>La solicitud <strong>${ticketId}</strong> no existe o fue eliminada del sistema.</p>
+            <div class="status-box">
+              Esta encuesta ya no está disponible.
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    };
+  }
+
   let isAlreadySubmitted = false;
   let existingSurveyData = await kvs.get(`survey_completed:${ticketId}`);
 
   if (existingSurveyData) {
     isAlreadySubmitted = true;
-  } else {
-    try {
-      const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${ticketId}?fields=customfield_12706`, {
-        headers: { 'Accept': 'application/json' }
-      });
-      if (issueRes.ok) {
-        const issueData = await issueRes.json();
-        const fieldValue = issueData.fields?.customfield_12706?.value;
-        if (fieldValue) {
-          isAlreadySubmitted = true;
-          existingSurveyData = { rating: fieldValue };
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
+  } else if (existingFieldValue) {
+    isAlreadySubmitted = true;
+    existingSurveyData = { rating: existingFieldValue };
   }
 
   if (isAlreadySubmitted) {
@@ -318,7 +357,7 @@ export async function run(event, context) {
           <label>Selecciona una opción:</label>
           <div class="rating-options">
             <div class="rating-option">
-              <input type="radio" id="r_bueno" name="rating" value="Bueno" checked />
+              <input type="radio" id="r_bueno" name="rating" value="Bueno" ${initialRating === 'Bueno' ? 'checked' : ''} />
               <label class="rating-card" for="r_bueno">
                 <span class="emoji">😄</span>
                 <span class="title">Bueno</span>
@@ -326,7 +365,7 @@ export async function run(event, context) {
             </div>
 
             <div class="rating-option">
-              <input type="radio" id="r_regular" name="rating" value="Regular" />
+              <input type="radio" id="r_regular" name="rating" value="Regular" ${initialRating === 'Regular' ? 'checked' : ''} />
               <label class="rating-card" for="r_regular">
                 <span class="emoji">😐</span>
                 <span class="title">Regular</span>
@@ -334,7 +373,7 @@ export async function run(event, context) {
             </div>
 
             <div class="rating-option">
-              <input type="radio" id="r_malo" name="rating" value="Malo" />
+              <input type="radio" id="r_malo" name="rating" value="Malo" ${initialRating === 'Malo' ? 'checked' : ''} />
               <label class="rating-card" for="r_malo">
                 <span class="emoji">🙁</span>
                 <span class="title">Malo</span>
@@ -360,14 +399,17 @@ export async function run(event, context) {
     body: htmlBody
   };
 }
+const ALLOWED_PROJECT_KEYS = ['ITSMT'];
 
 export async function sendSurveyEmail(event, context) {
   try {
-    console.log('sendSurveyEmail invocado con event:', JSON.stringify(event));
-
-    const issueKey = event?.issue?.key || event?.issue?.id || event?.issueKey || context?.extension?.issue?.key;
+    const issueKey = event?.issue?.key;
     if (!issueKey) {
-      console.error('No se encontro issueKey en el evento');
+      return;
+    }
+
+    const projectKey = event?.issue?.fields?.project?.key || issueKey.split('-')[0];
+    if (!ALLOWED_PROJECT_KEYS.includes(projectKey)) {
       return;
     }
 
@@ -375,18 +417,23 @@ export async function sendSurveyEmail(event, context) {
       const statusChange = event.changelog.items?.find(item => item.field === 'status');
       if (statusChange) {
         const toStatus = (statusChange.toString || '').toLowerCase();
+        console.log(`Ticket ${issueKey}: cambio de estado a '${statusChange.toString}'`);
         if (!toStatus.includes('cerrado') && !toStatus.includes('closed')) {
-          console.log(`Estado cambiado a '${statusChange.toString}', no es Cerrado. Se omite.`);
+          console.log(`Ticket ${issueKey}: el estado '${statusChange.toString}' no es Cerrado. Se omite.`);
           return;
         }
+      } else {
+        return;
       }
+    } else {
+      return;
     }
 
     const alreadySent = await kvs.get(`survey_email_sent:${issueKey}`);
     if (alreadySent && alreadySent.sentAt) {
       const diffMs = Date.now() - new Date(alreadySent.sentAt).getTime();
       if (diffMs < 30000) {
-        console.log(`Correo para ${issueKey} enviado hace menos de 30 segundos. Se omite duplicado.`);
+        console.log(`Ticket ${issueKey}: correo enviado hace menos de 30s. Se omite duplicado.`);
         return;
       }
     }
@@ -412,23 +459,48 @@ export async function sendSurveyEmail(event, context) {
 
     const notifyPayload = {
       subject: `Encuesta de Satisfacción - Solicitud ${issueKey}`,
-      textBody: `Hola ${reporterName},\n\nTu solicitud ${issueKey} ha sido cerrada.\nTe invitamos a evaluar el servicio recibido ingresando al siguiente enlace:\n${surveyUrl}\n\n¡Gracias por tu tiempo!`,
+      textBody: `Hola ${reporterName},\n\nTu solicitud ${issueKey} ha sido cerrada.\n¿Cómo fue nuestro servicio para esta solicitud?\n- Malo: ${surveyUrl}&rating=Malo\n- Regular: ${surveyUrl}&rating=Regular\n- Bueno: ${surveyUrl}&rating=Bueno\n\n¡Gracias por tu tiempo!`,
       htmlBody: `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #DFE1E6; border-radius: 8px; overflow: hidden;">
-          <div style="background-color: #0052CC; padding: 24px; text-align: center;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 600;">Encuesta de Satisfacción</h1>
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #DFE1E6; border-radius: 8px; overflow: hidden;">
+          <div style="background-color: #0052CC; padding: 20px 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 600;">Encuesta de Satisfacción</h1>
           </div>
-          <div style="padding: 32px 24px; color: #172B4D; font-size: 15px; line-height: 1.6;">
-            <p style="margin-top: 0;">Hola <strong>${reporterName}</strong>,</p>
-            <p>Te informamos que tu solicitud <strong style="color: #0052CC;">${issueKey}</strong> ha sido marcada como <strong>Cerrada</strong>.</p>
-            <p>Queremos brindarte la mejor experiencia posible, por lo que tu opinión sobre la atención recibida es fundamental para nosotros.</p>
-            <div style="text-align: center; margin: 32px 0;">
-              <a href="${surveyUrl}" style="background-color: #0052CC; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 700; font-size: 16px; display: inline-block;">
-                Calificar Atención
-              </a>
+          <div style="padding: 28px 24px; color: #172B4D;">
+            <p style="margin-top: 0; margin-bottom: 8px; font-size: 15px;">Hola <strong>${reporterName}</strong>,</p>
+            <p style="margin-top: 0; margin-bottom: 24px; font-size: 14px; color: #5E6C84; line-height: 1.5;">
+              Tu solicitud <strong style="color: #0052CC;">${issueKey}</strong> ha sido marcada como <strong>Cerrada</strong>.
+            </p>
+
+            <div style="background-color: #FAFBFC; border: 1px solid #DFE1E6; border-radius: 8px; padding: 24px 16px; text-align: center; margin: 20px 0;">
+              <p style="margin-top: 0; margin-bottom: 20px; font-size: 16px; font-weight: 600; color: #172B4D;">
+                ¿Cómo fue nuestro servicio para esta solicitud?
+              </p>
+
+              <table align="center" border="0" cellpadding="0" cellspacing="0" style="margin: 0 auto; width: 100%; max-width: 420px;">
+                <tr>
+                  <td align="center" style="width: 33.33%; padding: 0 6px;">
+                    <a href="${surveyUrl}&rating=Malo" style="display: block; text-decoration: none; background-color: #ffffff; border: 1px solid #DFE1E6; border-radius: 8px; padding: 14px 6px; text-align: center; color: #172B4D;">
+                      <span style="font-size: 30px; display: block; margin-bottom: 6px; line-height: 1;">🙁</span>
+                      <span style="font-size: 13px; font-weight: 700; color: #DE350B; display: block;">Malo</span>
+                    </a>
+                  </td>
+                  <td align="center" style="width: 33.33%; padding: 0 6px;">
+                    <a href="${surveyUrl}&rating=Regular" style="display: block; text-decoration: none; background-color: #ffffff; border: 1px solid #DFE1E6; border-radius: 8px; padding: 14px 6px; text-align: center; color: #172B4D;">
+                      <span style="font-size: 30px; display: block; margin-bottom: 6px; line-height: 1;">😐</span>
+                      <span style="font-size: 13px; font-weight: 700; color: #FF8B00; display: block;">Regular</span>
+                    </a>
+                  </td>
+                  <td align="center" style="width: 33.33%; padding: 0 6px;">
+                    <a href="${surveyUrl}&rating=Bueno" style="display: block; text-decoration: none; background-color: #ffffff; border: 1px solid #DFE1E6; border-radius: 8px; padding: 14px 6px; text-align: center; color: #172B4D;">
+                      <span style="font-size: 30px; display: block; margin-bottom: 6px; line-height: 1;">😄</span>
+                      <span style="font-size: 13px; font-weight: 700; color: #006644; display: block;">Bueno</span>
+                    </a>
+                  </td>
+                </tr>
+              </table>
             </div>
           </div>
-          <div style="background-color: #F4F5F7; padding: 16px 24px; text-align: center; font-size: 12px; color: #6B778C; border-top: 1px solid #DFE1E6;">
+          <div style="background-color: #F4F5F7; padding: 14px 24px; text-align: center; font-size: 12px; color: #6B778C; border-top: 1px solid #DFE1E6;">
             Mesa de Help Desk • Gestión de Servicios TI
           </div>
         </div>
@@ -449,7 +521,7 @@ export async function sendSurveyEmail(event, context) {
 
     const notifyStatus = notifyRes.status;
     const notifyBody = await notifyRes.text();
-    console.log(`Respuesta notify para ${issueKey}: status=${notifyStatus}, body=${notifyBody}`);
+    console.log(`Notify ${issueKey}: status=${notifyStatus}`);
   } catch (err) {
     console.error('Error en sendSurveyEmail:', err);
   }
