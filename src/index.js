@@ -47,15 +47,12 @@ export async function run(event, context) {
   }
 
   let ticketExists = false;
-  let existingFieldValue = null;
   try {
-    const verifyRes = await api.asApp().requestJira(route`/rest/api/3/issue/${ticketId}?fields=customfield_12706,summary`, {
+    const verifyRes = await api.asApp().requestJira(route`/rest/api/3/issue/${ticketId}?fields=summary`, {
       headers: { 'Accept': 'application/json' }
     });
     if (verifyRes.ok) {
       ticketExists = true;
-      const verifyData = await verifyRes.json();
-      existingFieldValue = verifyData.fields?.customfield_12706?.value || null;
     }
   } catch (e) {
     console.error(e);
@@ -101,9 +98,6 @@ export async function run(event, context) {
 
   if (existingSurveyData) {
     isAlreadySubmitted = true;
-  } else if (existingFieldValue) {
-    isAlreadySubmitted = true;
-    existingSurveyData = { rating: existingFieldValue };
   }
 
   if (isAlreadySubmitted) {
