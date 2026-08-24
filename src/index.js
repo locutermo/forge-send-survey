@@ -363,10 +363,22 @@ export async function run(event, context) {
 
 export async function sendSurveyEmail(event, context) {
   try {
-    const issueKey = event?.issue?.key || event?.issue?.id;
+    console.log('sendSurveyEmail ejecutado con event:', JSON.stringify(event));
+    const issueKey = event?.issue?.key || event?.issue?.id || event?.issueKey || context?.extension?.issue?.key;
     if (!issueKey) {
       console.error('No se encontro issueKey en el evento de transicion');
       return;
+    }
+
+    let reporterAccountId = null;
+    try {
+      const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=reporter,summary`);
+      if (issueRes.ok) {
+        const issueData = await issueRes.json();
+        reporterAccountId = issueData.fields?.reporter?.accountId;
+      }
+    } catch (fetchErr) {
+      console.error(fetchErr);
     }
 
     const baseUrl = process.env.WEBTRIGGER_SURVEY_URL || 'https://d855b895-7188-44bc-8e14-21f7d83a1142.webtrigger.atlassian.app/public/KVOty-1Sb6K0u_nw8w1gxLggDqs';
@@ -401,7 +413,8 @@ export async function sendSurveyEmail(event, context) {
         </div>
       `,
       to: {
-        reporter: true
+        reporter: true,
+        users: reporterAccountId ? [{ accountId: reporterAccountId }] : []
       }
     };
 
@@ -414,10 +427,9 @@ export async function sendSurveyEmail(event, context) {
       body: JSON.stringify(notifyPayload)
     });
 
-    if (!notifyRes.ok) {
-      const errText = await notifyRes.text();
-      console.error(`Error enviando notificacion a reporter (${notifyRes.status}): ${errText}`);
-    }
+    const notifyStatus = notifyRes.status;
+    const notifyBody = await notifyRes.text();
+    console.log(`Respuesta notify: status=${notifyStatus}, body=${notifyBody}`);
   } catch (err) {
     console.error('Error en sendSurveyEmail:', err);
   }
