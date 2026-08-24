@@ -19,6 +19,75 @@ export async function run(event, context) {
     ? queryParams.ticketId[0]
     : (queryParams.issueKey ? queryParams.issueKey[0] : 'DESCONOCIDO');
 
+  // A. Verificar si la encuesta ya fue respondida anteriormente para este ticket
+  let isAlreadySubmitted = false;
+  let existingSurveyData = null;
+
+  if (ticketId !== 'DESCONOCIDO') {
+    // 1. Consultar primero en Key-Value Storage (KVS)
+    existingSurveyData = await kvs.get(`survey_completed:${ticketId}`);
+    if (existingSurveyData) {
+      isAlreadySubmitted = true;
+    } else {
+      // 2. Consulta de respaldo en la API de Jira (verificar si customfield_12706 ya tiene valor)
+      try {
+        const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${ticketId}?fields=customfield_12706`, {
+          headers: { 'Accept': 'application/json' }
+        });
+        if (issueRes.ok) {
+          const issueData = await issueRes.json();
+          const fieldValue = issueData.fields?.customfield_12706?.value;
+          if (fieldValue) {
+            isAlreadySubmitted = true;
+            existingSurveyData = { rating: fieldValue };
+          }
+        }
+      } catch (e) {
+        console.error(`Error al verificar encuesta previa para ${ticketId}:`, e);
+      }
+    }
+  }
+
+  // Si ya fue respondida, mostrar la pantalla informativa de "Encuesta Ya Completada"
+  if (isAlreadySubmitted) {
+    const ratingVal = existingSurveyData?.rating || 'Registrada';
+    const ratingEmoji = ratingVal === 'Bueno' ? '😄' : (ratingVal === 'Regular' ? '😐' : (ratingVal === 'Malo' ? '🙁' : '✅'));
+
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': ['text/html; charset=utf-8'] },
+      body: `
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Encuesta Completada - ${ticketId}</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f5f7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); text-align: center; max-width: 440px; width: 90%; }
+            h2 { color: #0052CC; margin-bottom: 12px; font-size: 22px; }
+            p { color: #5E6C84; line-height: 1.5; font-size: 15px; }
+            .ticket-badge { background: #DEEBFF; color: #0747A6; padding: 4px 8px; border-radius: 4px; font-weight: 700; font-size: 14px; }
+            .status-box { background: #E3FCEF; border: 1px solid #ABF5D1; color: #006644; padding: 12px; border-radius: 8px; font-weight: 600; margin-top: 16px; font-size: 14px; }
+            .icon { font-size: 56px; margin-bottom: 16px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="icon">📋</div>
+            <h2>Encuesta Ya Completada</h2>
+            <p>La evaluación para la solicitud <span class="ticket-badge">${ticketId}</span> ya fue registrada anteriormente. ¡Muchas gracias por tus comentarios!</p>
+            <div class="status-box">
+              ${ratingEmoji} Calificación registrada: <strong>${ratingVal}</strong>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    };
+  }
+
   // 1. Procesar envío de formulario (POST)
   if (method === 'POST') {
     try {
@@ -106,7 +175,15 @@ export async function run(event, context) {
           body: JSON.stringify(commentData)
         });
 
-        // C. Persistir respuesta en Forge Storage para Reportería y Métricas
+        // C. Marcar encuesta como completada para este ticket en KVS para prevenir re-envíos
+        await kvs.set(`survey_completed:${submittedTicketId}`, {
+          rating,
+          ratingScore,
+          comments,
+          submittedAt: new Date().toISOString()
+        });
+
+        // D. Persistir respuesta en Forge Storage para Reportería y Métricas
         const newRecord = {
           id: `survey:${submittedTicketId}:${Date.now()}`,
           ticketId: submittedTicketId,
