@@ -9,29 +9,61 @@ export async function run(event, context) {
     ? queryParams.ticketId[0]
     : (queryParams.issueKey ? queryParams.issueKey[0] : 'DESCONOCIDO');
 
-  let isAlreadySubmitted = false;
-  let existingSurveyData = null;
+  if (!ticketId || ticketId === 'DESCONOCIDO' || ticketId.trim() === '') {
+    return {
+      statusCode: 400,
+      headers: { 'Content-Type': ['text/html; charset=utf-8'] },
+      body: `
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Enlace Inválido - Encuesta</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f5f7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.1); text-align: center; max-width: 440px; width: 90%; }
+            h2 { color: #DE350B; margin-bottom: 12px; font-size: 22px; }
+            p { color: #5E6C84; line-height: 1.5; font-size: 15px; }
+            .status-box { background: #FFEBE6; border: 1px solid #FFBDAD; color: #BF2600; padding: 12px; border-radius: 8px; font-weight: 600; margin-top: 16px; font-size: 14px; }
+            .icon { font-size: 56px; margin-bottom: 16px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="icon">⚠️</div>
+            <h2>Enlace de Encuesta Inválido</h2>
+            <p>No se especificó ninguna solicitud válida para evaluar.</p>
+            <div class="status-box">
+              Por favor, utiliza el enlace personalizado enviado a tu correo electrónico al cerrarse el ticket.
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    };
+  }
 
-  if (ticketId !== 'DESCONOCIDO') {
-    existingSurveyData = await kvs.get(`survey_completed:${ticketId}`);
-    if (existingSurveyData) {
-      isAlreadySubmitted = true;
-    } else {
-      try {
-        const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${ticketId}?fields=customfield_12706`, {
-          headers: { 'Accept': 'application/json' }
-        });
-        if (issueRes.ok) {
-          const issueData = await issueRes.json();
-          const fieldValue = issueData.fields?.customfield_12706?.value;
-          if (fieldValue) {
-            isAlreadySubmitted = true;
-            existingSurveyData = { rating: fieldValue };
-          }
+  let isAlreadySubmitted = false;
+  let existingSurveyData = await kvs.get(`survey_completed:${ticketId}`);
+
+  if (existingSurveyData) {
+    isAlreadySubmitted = true;
+  } else {
+    try {
+      const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${ticketId}?fields=customfield_12706`, {
+        headers: { 'Accept': 'application/json' }
+      });
+      if (issueRes.ok) {
+        const issueData = await issueRes.json();
+        const fieldValue = issueData.fields?.customfield_12706?.value;
+        if (fieldValue) {
+          isAlreadySubmitted = true;
+          existingSurveyData = { rating: fieldValue };
         }
-      } catch (e) {
-        console.error(e);
       }
+    } catch (e) {
+      console.error(e);
     }
   }
 
@@ -87,6 +119,14 @@ export async function run(event, context) {
         submittedTicketId = parsedParams.get('ticketId') || submittedTicketId;
       }
 
+      if (!submittedTicketId || submittedTicketId === 'DESCONOCIDO' || submittedTicketId.trim() === '') {
+        return {
+          statusCode: 400,
+          headers: { 'Content-Type': ['text/html; charset=utf-8'] },
+          body: `<h3>No se puede registrar la encuesta sin un identificador de ticket válido.</h3>`
+        };
+      }
+
       if (!['Bueno', 'Regular', 'Malo'].includes(rating)) {
         rating = 'Bueno';
       }
@@ -94,103 +134,101 @@ export async function run(event, context) {
       const ratingScore = rating === 'Bueno' ? 3 : (rating === 'Regular' ? 2 : 1);
       const ratingEmoji = rating === 'Bueno' ? '😄' : (rating === 'Regular' ? '😐' : '🙁');
 
-      if (submittedTicketId !== 'DESCONOCIDO') {
-        try {
-          const updateFieldRes = await api.asApp().requestJira(route`/rest/api/3/issue/${submittedTicketId}`, {
-            method: 'PUT',
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              fields: {
-                customfield_12706: {
-                  value: rating
-                }
-              }
-            })
-          });
-
-          if (!updateFieldRes.ok) {
-            const errorText = await updateFieldRes.text();
-            console.error(errorText);
-          }
-        } catch (fieldErr) {
-          console.error(fieldErr);
-        }
-
-        const commentData = {
-          body: {
-            type: 'doc',
-            version: 1,
-            content: [
-              {
-                type: 'paragraph',
-                content: [
-                  {
-                    type: 'text',
-                    text: `⭐ Encuesta de Satisfacción Recibida:\n- Calificación: ${ratingEmoji} ${rating} (${ratingScore}/3)\n- Comentarios: ${comments || 'Sin comentarios'}`
-                  }
-                ]
-              }
-            ]
-          },
-          properties: [
-            {
-              key: 'jsm-survey-response',
-              value: {
-                rating,
-                ratingScore,
-                comments,
-                submittedAt: new Date().toISOString()
-              }
-            }
-          ]
-        };
-
-        await api.asApp().requestJira(route`/rest/api/3/issue/${submittedTicketId}/comment`, {
-          method: 'POST',
+      try {
+        const updateFieldRes = await api.asApp().requestJira(route`/rest/api/3/issue/${submittedTicketId}`, {
+          method: 'PUT',
           headers: {
             'Accept': 'application/json',
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(commentData)
+          body: JSON.stringify({
+            fields: {
+              customfield_12706: {
+                value: rating
+              }
+            }
+          })
         });
 
-        await kvs.set(`survey_completed:${submittedTicketId}`, {
-          rating,
-          ratingScore,
-          comments,
-          submittedAt: new Date().toISOString()
-        });
-
-        const newRecord = {
-          id: `survey:${submittedTicketId}:${Date.now()}`,
-          ticketId: submittedTicketId,
-          rating,
-          ratingScore,
-          comments,
-          submittedAt: new Date().toISOString()
-        };
-
-        const recentList = (await kvs.get('survey_recent_list')) || [];
-        recentList.unshift(newRecord);
-        if (recentList.length > 100) recentList.pop();
-        await kvs.set('survey_recent_list', recentList);
-
-        const summary = (await kvs.get('survey_metrics_summary')) || {
-          total: 0,
-          bueno: 0,
-          regular: 0,
-          malo: 0
-        };
-        summary.total += 1;
-        if (rating === 'Bueno') summary.bueno += 1;
-        else if (rating === 'Regular') summary.regular += 1;
-        else if (rating === 'Malo') summary.malo += 1;
-
-        await kvs.set('survey_metrics_summary', summary);
+        if (!updateFieldRes.ok) {
+          const errorText = await updateFieldRes.text();
+          console.error(errorText);
+        }
+      } catch (fieldErr) {
+        console.error(fieldErr);
       }
+
+      const commentData = {
+        body: {
+          type: 'doc',
+          version: 1,
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                {
+                  type: 'text',
+                  text: `⭐ Encuesta de Satisfacción Recibida:\n- Calificación: ${ratingEmoji} ${rating} (${ratingScore}/3)\n- Comentarios: ${comments || 'Sin comentarios'}`
+                }
+              ]
+            }
+          ]
+        },
+        properties: [
+          {
+            key: 'jsm-survey-response',
+            value: {
+              rating,
+              ratingScore,
+              comments,
+              submittedAt: new Date().toISOString()
+            }
+          }
+        ]
+      };
+
+      await api.asApp().requestJira(route`/rest/api/3/issue/${submittedTicketId}/comment`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(commentData)
+      });
+
+      await kvs.set(`survey_completed:${submittedTicketId}`, {
+        rating,
+        ratingScore,
+        comments,
+        submittedAt: new Date().toISOString()
+      });
+
+      const newRecord = {
+        id: `survey:${submittedTicketId}:${Date.now()}`,
+        ticketId: submittedTicketId,
+        rating,
+        ratingScore,
+        comments,
+        submittedAt: new Date().toISOString()
+      };
+
+      const recentList = (await kvs.get('survey_recent_list')) || [];
+      recentList.unshift(newRecord);
+      if (recentList.length > 100) recentList.pop();
+      await kvs.set('survey_recent_list', recentList);
+
+      const summary = (await kvs.get('survey_metrics_summary')) || {
+        total: 0,
+        bueno: 0,
+        regular: 0,
+        malo: 0
+      };
+      summary.total += 1;
+      if (rating === 'Bueno') summary.bueno += 1;
+      else if (rating === 'Regular') summary.regular += 1;
+      else if (rating === 'Malo') summary.malo += 1;
+
+      await kvs.set('survey_metrics_summary', summary);
 
       return {
         statusCode: 200,
