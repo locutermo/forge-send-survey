@@ -35,7 +35,7 @@ const App = () => {
         },
         body: JSON.stringify({
           jql: `project = "${projectKey}" AND "cf[12706]" is not EMPTY ORDER BY updated DESC`,
-          fields: ['summary', 'customfield_12706', 'updated'],
+          fields: ['summary', 'customfield_12706', 'updated', 'reporter', 'assignee'],
           maxResults: 100
         })
       });
@@ -58,10 +58,15 @@ const App = () => {
         else if (ratingVal === 'Malo') stats.malo += 1;
         stats.total += 1;
 
+        const reporterName = issue.fields?.reporter?.displayName || 'Desconocido';
+        const assigneeName = issue.fields?.assignee?.displayName || 'Sin asignar';
+
         return {
           key: issue.key,
           summary: issue.fields?.summary || '',
           rating: ratingVal,
+          reporter: reporterName,
+          assignee: assigneeName,
           updated: issue.fields?.updated || ''
         };
       });
@@ -86,10 +91,12 @@ const App = () => {
 
   const head = {
     cells: [
-      { key: 'key', content: 'Clave Ticket', isSortable: true, width: 25 },
-      { key: 'summary', content: 'Resumen', width: 40 },
-      { key: 'rating', content: 'Calificación', isSortable: true, width: 20 },
-      { key: 'updated', content: 'Fecha de Respuesta', isSortable: true, width: 15 }
+      { key: 'key', content: 'Clave Ticket', isSortable: true, width: 14 },
+      { key: 'summary', content: 'Resumen', width: 26 },
+      { key: 'reporter', content: 'Reportado por', isSortable: true, width: 16 },
+      { key: 'assignee', content: 'Atendido por', isSortable: true, width: 16 },
+      { key: 'rating', content: 'Calificación', isSortable: true, width: 13 },
+      { key: 'updated', content: 'Fecha y Hora', isSortable: true, width: 15 }
     ]
   };
 
@@ -98,7 +105,17 @@ const App = () => {
     if (item.rating === 'Regular') lozengeAppearance = 'inprogress';
     if (item.rating === 'Malo') lozengeAppearance = 'removed';
 
-    const formattedDate = item.updated ? new Date(item.updated).toLocaleDateString('es-ES') : '-';
+    let formattedDate = '-';
+    if (item.updated) {
+      const d = new Date(item.updated);
+      formattedDate = d.toLocaleString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    }
 
     return {
       key: `row-${index}-${item.key}`,
@@ -110,6 +127,14 @@ const App = () => {
         {
           key: 'summary',
           content: <Text>{item.summary || 'Sin resumen'}</Text>
+        },
+        {
+          key: 'reporter',
+          content: <Text>{item.reporter}</Text>
+        },
+        {
+          key: 'assignee',
+          content: <Text>{item.assignee}</Text>
         },
         {
           key: 'rating',
@@ -138,13 +163,10 @@ const App = () => {
   return (
     <Stack space="space.300">
       <Inline spread="space-between" alignBlock="center">
-        <Stack space="space.050">
-          <Inline space="space.100" alignBlock="center">
-            <Heading size="large">Reporte de Encuestas de Satisfacción</Heading>
-            <Tag text="ITSM" color="blue" />
-          </Inline>
+        <Inline space="space.100" alignBlock="center">
+          <Tag text="ITSM" color="blue" />
           <Text>Desempeño y calificaciones de servicio para las solicitudes del proyecto ITSM</Text>
-        </Stack>
+        </Inline>
         <Button appearance="subtle" onClick={fetchSurveyData}>
           Actualizar datos
         </Button>
