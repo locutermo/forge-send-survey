@@ -363,19 +363,39 @@ export async function run(event, context) {
 
 export async function sendSurveyEmail(event, context) {
   try {
-    console.log('sendSurveyEmail ejecutado con event:', JSON.stringify(event));
+    console.log('sendSurveyEmail disparado. Event:', JSON.stringify(event));
+
     const issueKey = event?.issue?.key || event?.issue?.id || event?.issueKey || context?.extension?.issue?.key;
     if (!issueKey) {
-      console.error('No se encontro issueKey en el evento de transicion');
+      console.error('No se encontro issueKey en el evento');
+      return;
+    }
+
+    if (event?.changelog) {
+      const statusChange = event.changelog.items?.find(item => item.field === 'status');
+      if (statusChange) {
+        const toStatus = (statusChange.toString || '').toLowerCase();
+        if (!toStatus.includes('cerrado') && !toStatus.includes('closed')) {
+          console.log(`Estado cambiado a '${statusChange.toString}', no es Cerrado. Se omite.`);
+          return;
+        }
+      }
+    }
+
+    const alreadySent = await kvs.get(`survey_email_sent:${issueKey}`);
+    if (alreadySent) {
+      console.log(`El correo de encuesta para ${issueKey} ya fue enviado recientemente.`);
       return;
     }
 
     let reporterAccountId = null;
+    let reporterName = 'Usuario';
     try {
-      const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=reporter,summary`);
+      const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=reporter,summary,status`);
       if (issueRes.ok) {
         const issueData = await issueRes.json();
         reporterAccountId = issueData.fields?.reporter?.accountId;
+        reporterName = issueData.fields?.reporter?.displayName || reporterName;
       }
     } catch (fetchErr) {
       console.error(fetchErr);
@@ -387,14 +407,14 @@ export async function sendSurveyEmail(event, context) {
 
     const notifyPayload = {
       subject: `Encuesta de Satisfacción - Solicitud ${issueKey}`,
-      textBody: `Hola,\n\nTu solicitud ${issueKey} ha sido cerrada.\nTe invitamos a evaluar el servicio recibido ingresando al siguiente enlace:\n${surveyUrl}\n\n¡Gracias por tu tiempo!`,
+      textBody: `Hola ${reporterName},\n\nTu solicitud ${issueKey} ha sido cerrada.\nTe invitamos a evaluar el servicio recibido ingresando al siguiente enlace:\n${surveyUrl}\n\n¡Gracias por tu tiempo!`,
       htmlBody: `
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #DFE1E6; border-radius: 8px; overflow: hidden;">
           <div style="background-color: #0052CC; padding: 24px; text-align: center;">
             <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 600;">Encuesta de Satisfacción</h1>
           </div>
           <div style="padding: 32px 24px; color: #172B4D; font-size: 15px; line-height: 1.6;">
-            <p style="margin-top: 0;">Hola,</p>
+            <p style="margin-top: 0;">Hola <strong>${reporterName}</strong>,</p>
             <p>Te informamos que tu solicitud <strong style="color: #0052CC;">${issueKey}</strong> ha sido marcada como <strong>Cerrada</strong>.</p>
             <p>Queremos brindarte la mejor experiencia posible, por lo que tu opinión sobre la atención recibida es fundamental para nosotros.</p>
             <div style="text-align: center; margin: 32px 0;">
@@ -429,7 +449,14 @@ export async function sendSurveyEmail(event, context) {
 
     const notifyStatus = notifyRes.status;
     const notifyBody = await notifyRes.text();
-    console.log(`Respuesta notify: status=${notifyStatus}, body=${notifyBody}`);
+    console.log(`Respuesta notify para ${issueKey}: status=${notifyStatus}, body=${notifyBody}`);
+
+    if (notifyRes.ok || notifyStatus === 204) {
+      await kvs.set(`survey_email_sent:${issueKey}`, {
+        sentAt: new Date().toISOString(),
+        reporterAccountId
+      });
+    }
   } catch (err) {
     console.error('Error en sendSurveyEmail:', err);
   }
