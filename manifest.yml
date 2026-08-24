@@ -13,7 +13,7 @@ modules:
     - key: survey-handler
       handler: index.run
     - key: project-page-fn
-      handler: index.runProjectPage
+      handler: project-page.run
 app:
   runtime:
     name: nodejs24.x
@@ -25,7 +25,3 @@ permissions:
     - read:jira-work
     - write:jira-work
     - storage:app
-
-
-
-
