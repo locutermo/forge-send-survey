@@ -363,23 +363,17 @@ export async function run(event, context) {
 
 export async function sendSurveyEmail(event, context) {
   try {
+    console.log('sendSurveyEmail postfunction ejecutado con event:', JSON.stringify(event));
+
     const issueKey = event?.issue?.key || event?.issue?.id || event?.issueKey || context?.extension?.issue?.key;
     if (!issueKey) {
+      console.error('No se encontro issueKey en el evento de postfunction');
       return;
-    }
-
-    if (event?.changelog) {
-      const statusChange = event.changelog.items?.find(item => item.field === 'status');
-      if (statusChange) {
-        const toStatus = (statusChange.toString || '').toLowerCase();
-        if (!toStatus.includes('cerrado') && !toStatus.includes('closed')) {
-          return;
-        }
-      }
     }
 
     const alreadySent = await kvs.get(`survey_email_sent:${issueKey}`);
     if (alreadySent) {
+      console.log(`El correo para ${issueKey} ya fue enviado recientemente.`);
       return;
     }
 
@@ -441,8 +435,8 @@ export async function sendSurveyEmail(event, context) {
 
     const notifyStatus = notifyRes.status;
     const notifyBody = await notifyRes.text();
-    console.log(`Respuesta notify para ${issueKey}: status=${notifyStatus}, body=${notifyBody}`);
+    console.log(`Respuesta notify postfunction para ${issueKey}: status=${notifyStatus}, body=${notifyBody}`);
   } catch (err) {
-    console.error('Error en sendSurveyEmail:', err);
+    console.error('Error en sendSurveyEmail postfunction:', err);
   }
 }
