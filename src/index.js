@@ -393,7 +393,7 @@ export async function run(event, context) {
     body: htmlBody
   };
 }
-const ALLOWED_PROJECT_KEYS = ['ITSMT'];
+const ALLOWED_PROJECT_KEYS = ['ITSM'];
 
 export async function sendSurveyEmail(event, context) {
   try {

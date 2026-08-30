@@ -11,7 +11,7 @@ modules:
       resource: main
       render: native
       displayConditions:
-        projectKey: "ITSMT"
+        projectKey: "ITSM"
   trigger:
     - key: issue-closed-trigger
       events:
