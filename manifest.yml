@@ -17,11 +17,18 @@ modules:
       events:
         - avi:jira:updated:issue
       function: send-survey-email-fn
+  scheduledTrigger:
+    - key: auto-close-expired-issues
+      function: auto-close-expired-fn
+      interval: hour
   function:
     - key: survey-handler
       handler: index.run
     - key: send-survey-email-fn
       handler: index.sendSurveyEmail
+    - key: auto-close-expired-fn
+      handler: index.autoCloseExpiredIssues
+      timeoutSeconds: 120
 resources:
   - key: main
     path: src/frontend/index.jsx

@@ -520,3 +520,141 @@ export async function sendSurveyEmail(event, context) {
     console.error('Error en sendSurveyEmail:', err);
   }
 }
+
+/**
+ * Proyecto objetivo para el auto-cierre de tickets expirados.
+ * Se usa la misma constante definida en ALLOWED_PROJECT_KEYS para consistencia.
+ */
+const AUTO_CLOSE_PROJECT = 'ITSM';
+
+/**
+ * ID de la transición de "Terminado" a "Cerrado" en el flujo de trabajo del proyecto ITSM.
+ */
+const TRANSITION_TO_CLOSED_ID = '4';
+
+/**
+ * Identificador del campo personalizado "Fecha y hora de Terminado" (tipo Datetime).
+ */
+const FINISHED_DATETIME_FIELD = 'customfield_12742';
+
+/**
+ * Umbral en horas después del cual un ticket en estado "Terminado" debe cerrarse
+ * automáticamente si el usuario no ha respondido la encuesta de conformidad.
+ */
+const EXPIRATION_HOURS = 48;
+
+/**
+ * Cantidad máxima de issues a solicitar por página en la búsqueda JQL.
+ */
+const PAGE_SIZE = 100;
+
+/**
+ * Scheduled Trigger — Auto-cierre de tickets expirados.
+ *
+ * Busca issues del proyecto ITSM en estado "Terminado" cuyo campo
+ * "Fecha y hora de Terminado" (customfield_12742) tenga más de 48 horas
+ * de antigüedad respecto al momento de ejecución. Los issues que cumplan
+ * esta condición se transicionan automáticamente al estado "Cerrado".
+ *
+ * Se ejecuta cada hora vía el módulo scheduledTrigger de Forge.
+ * Los scheduled triggers corren sin contexto de usuario (asApp).
+ */
+export async function autoCloseExpiredIssues(event, context) {
+  const now = new Date();
+  console.log(`[AutoClose] Ejecución iniciada: ${now.toISOString()}`);
+
+  const jql = `project = ${AUTO_CLOSE_PROJECT} AND status = "Terminado" AND "${FINISHED_DATETIME_FIELD}" <= "-${EXPIRATION_HOURS}h"`;
+
+  let startAt = 0;
+  let totalProcessed = 0;
+  let totalTransitioned = 0;
+  let totalSkipped = 0;
+  let totalErrors = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    let searchResponse;
+    try {
+      searchResponse = await api.asApp().requestJira(
+        route`/rest/api/3/search/jql?jql=${jql}&fields=${FINISHED_DATETIME_FIELD}&startAt=${startAt}&maxResults=${PAGE_SIZE}`,
+        { headers: { 'Accept': 'application/json' } }
+      );
+    } catch (searchErr) {
+      console.error(`[AutoClose] Error en búsqueda JQL (startAt=${startAt}):`, searchErr);
+      break;
+    }
+
+    if (!searchResponse.ok) {
+      const errorText = await searchResponse.text();
+      console.error(`[AutoClose] Búsqueda JQL falló (status=${searchResponse.status}): ${errorText}`);
+      break;
+    }
+
+    const searchData = await searchResponse.json();
+    const issues = searchData.issues || [];
+    const total = searchData.total || 0;
+
+    if (startAt === 0) {
+      console.log(`[AutoClose] Issues candidatos encontrados: ${total}`);
+    }
+
+    for (const issue of issues) {
+      totalProcessed++;
+      const issueKey = issue.key;
+      const finishedDateStr = issue.fields?.[FINISHED_DATETIME_FIELD];
+
+      if (!finishedDateStr) {
+        console.log(`[AutoClose] ${issueKey}: sin fecha en ${FINISHED_DATETIME_FIELD}, se omite.`);
+        totalSkipped++;
+        continue;
+      }
+
+      const finishedDate = new Date(finishedDateStr);
+      const elapsedMs = now.getTime() - finishedDate.getTime();
+      const elapsedHours = elapsedMs / (1000 * 60 * 60);
+
+      if (elapsedHours < EXPIRATION_HOURS) {
+        console.log(`[AutoClose] ${issueKey}: ${elapsedHours.toFixed(1)}h transcurridas, aún no expira. Se omite.`);
+        totalSkipped++;
+        continue;
+      }
+
+      try {
+        const transitionResponse = await api.asApp().requestJira(
+          route`/rest/api/3/issue/${issueKey}/transitions`,
+          {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              transition: { id: TRANSITION_TO_CLOSED_ID }
+            })
+          }
+        );
+
+        if (transitionResponse.ok || transitionResponse.status === 204) {
+          console.log(`[AutoClose] ${issueKey}: transicionado a Cerrado (${elapsedHours.toFixed(1)}h en Terminado).`);
+          totalTransitioned++;
+        } else {
+          const errText = await transitionResponse.text();
+          console.error(`[AutoClose] ${issueKey}: transición falló (status=${transitionResponse.status}): ${errText}`);
+          totalErrors++;
+        }
+      } catch (transitionErr) {
+        console.error(`[AutoClose] ${issueKey}: error en transición:`, transitionErr);
+        totalErrors++;
+      }
+    }
+
+    startAt += issues.length;
+    hasMore = startAt < total && issues.length > 0;
+  }
+
+  console.log(
+    `[AutoClose] Ejecución finalizada. ` +
+    `Procesados: ${totalProcessed}, Transicionados: ${totalTransitioned}, ` +
+    `Omitidos: ${totalSkipped}, Errores: ${totalErrors}`
+  );
+}
